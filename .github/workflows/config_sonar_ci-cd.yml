@@ -123,7 +123,6 @@ jobs:
 
          path: target/*.jar
 
- 
 
  sonar:
 
@@ -229,8 +228,6 @@ jobs:
 
          fetch-depth: 0
 
- 
-
      # Use OIDC Role for this repo
 
      - name: Configure AWS Credentials
@@ -242,8 +239,6 @@ jobs:
          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
          aws-region: ${{ secrets.AWS_REGION }}
-
- 
 
      # Download the JAR file artifact from the build job
 
