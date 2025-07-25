@@ -212,9 +212,7 @@ jobs:
 
      #       sleepTime: 10  # Seconds between status checks
 
-# .github/workflows/config_sonar_ci-cd.yml
-
-docker:
+ docker:
 
    name: Docker Build & Push to ECR
 
