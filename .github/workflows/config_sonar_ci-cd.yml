@@ -32,6 +32,12 @@ on:
 
      - main
 
+ pull_request:
+
+   branches:
+
+     - main
+
  
 
 permissions:
@@ -86,7 +92,6 @@ jobs:
 
          cache: 'maven'
 
- 
 
      - name: Cache Maven packages
 
@@ -196,19 +201,19 @@ jobs:
 
     
 
-     # - name: Verify Quality Gate Status
+     - name: Verify Quality Gate Status
 
-     #   uses: sonarsource/sonarqube-quality-gate-action@master
+       uses: sonarsource/sonarqube-quality-gate-action@master
 
-     #   with:
+       with:
 
-     #       scanMetadataReportFile: .scannerwork/report-task.txt
+           scanMetadataReportFile: target/sonar/report-task.txt
 
-     #       sonarToken: ${{ secrets.SONAR_TOKEN }}
+           pollingTimeoutSec: 300
 
-     #       timeoutMinutes: 5
+       env:
 
-     #       sleepTime: 10  # Seconds between status checks
+         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
  docker:
 
