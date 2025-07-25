@@ -281,7 +281,7 @@ jobs:
 
        with:
 
-         image-ref: geo_app:${{ github.sha }}
+         image-ref: geo-app:${{ github.sha }}
 
          format: table  # can also use 'json' or 'sarif'
 
