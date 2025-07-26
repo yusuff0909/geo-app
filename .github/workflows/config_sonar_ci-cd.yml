@@ -349,11 +349,19 @@ jobs:
 
         APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
 
-        echo $APP_VERSION
+        BUILD_NUMBER=${{ steps.build-number.outputs.build_number }}
 
-        docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
+        echo "App Version: $APP_VERSION"
 
-        docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:$APP_VERSION
+        echo "Build Number: $BUILD_NUMBER"
+
+        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
+
+        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:$APP_VERSION
+
+        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:$BUILD_NUMBER
+
+        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:latest
 
 # Push Docker image to ECR    
      - name: Push Docker image to ECR
@@ -362,8 +370,142 @@ jobs:
 
         APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
 
-        echo $APP_VERSION
+        BUILD_NUMBER=${{ steps.build-number.outputs.build_number }}
+
+        echo "App Version: $APP_VERSION"
+
+        echo "Build Number: $BUILD_NUMBER"
 
         docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
 
         docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:$APP_VERSION
+
+        docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:$BUILD_NUMBER
+
+        docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:latest
+
+     - name: Post Fix Suggestions on PR
+
+       if: github.event_name == 'pull_request'
+
+       uses: actions/github-script@v6
+
+       with:
+
+         github-token: ${{ secrets.GITHUB_TOKEN }}
+
+         script: |
+
+           // Use require() to import Node.js modules
+
+           const fs = require('fs');
+
+           
+
+           try {
+
+             let fsReport = { Results: [] };
+
+             let imageReport = { Results: [] };
+
+             
+
+             // Try to read filesystem report
+
+             try {
+
+               if (fs.existsSync('trivy-fs-results.json')) {
+
+                 fsReport = JSON.parse(fs.readFileSync('trivy-fs-results.json', 'utf8'));
+
+               } else {
+
+                 console.log('trivy-fs-results.json not found');
+
+               }
+
+             } catch (fsError) {
+
+               console.log('Error reading filesystem report:', fsError.message);
+
+             }
+
+             
+
+             // Try to read image report
+
+             try {
+
+               if (fs.existsSync('trivy-image-results.json')) {
+
+                 imageReport = JSON.parse(fs.readFileSync('trivy-image-results.json', 'utf8'));
+
+               } else {
+
+                 console.log('trivy-image-results.json not found');
+
+               }
+
+             } catch (imageError) {
+
+               console.log('Error reading image report:', imageError.message);
+
+             }
+
+             
+
+             const formatVulns = (vulns) => vulns.map(v => `
+
+               **Package:** ${v.PkgName} (${v.InstalledVersion})  
+
+               **CVE:** ${v.VulnerabilityID} (${v.Severity})  
+
+               **Fix Version:** ${v.FixedVersion || 'None'}  
+
+               **Advisory:** ${v.PrimaryURL || 'N/A'}
+
+             `).join('\n');
+
+             
+
+             const fsVulns = fsReport.Results?.flatMap(r => r.Vulnerabilities || []) || [];
+
+             const imageVulns = imageReport.Results?.flatMap(r => r.Vulnerabilities || []) || [];
+
+             
+
+             let comment = '## 🔍 Trivy Security Report\n';
+
+             if (fsVulns.length > 0) comment += `### 📂 Filesystem Vulnerabilities\n${formatVulns(fsVulns)}\n`;
+
+             if (imageVulns.length > 0) comment += `### 🐳 Docker Image Vulnerabilities\n${formatVulns(imageVulns)}\n`;
+
+             if (fsVulns.length + imageVulns.length === 0) comment += '✅ No critical/high vulnerabilities found.';
+
+             
+
+             await github.rest.issues.createComment({
+
+               issue_number: context.issue.number,
+
+               owner: context.repo.owner,
+
+               repo: context.repo.repo,
+
+               body: comment
+
+             });
+
+             
+
+             console.log('Successfully posted security report comment');
+
+             
+
+           } catch (error) {
+
+             console.error('Failed to process Trivy results:', error.message);
+
+             core.setFailed('Failed to process Trivy results: ' + error.message);
+
+           }
