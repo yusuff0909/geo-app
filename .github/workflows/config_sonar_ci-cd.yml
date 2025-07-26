@@ -371,10 +371,23 @@ jobs:
         run: |
           aws ecs describe-task-definition --task-definition ${{ env.TASK_DEFINITION }} --query taskDefinition > task-definition.json
       
+      - name: Debug image URI and task definition
+        run: |
+          echo "Image URI: ${{ needs.docker.outputs.image-uri }}"
+          echo "Container Name: ${{ env.CONTAINER_NAME }}"
+          echo "Current task definition containers:"
+          cat task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
+      
       - name: Update task definition with new ECR image
         run: |
-          jq --arg IMAGE_URI "${{ needs.docker.outputs.image-uri }}" '.containerDefinitions[0].image = $IMAGE_URI | 
+          jq --arg IMAGE_URI "${{ needs.docker.outputs.image-uri }}" --arg CONTAINER_NAME "${{ env.CONTAINER_NAME }}" '
+          (.containerDefinitions[] | select(.name == $CONTAINER_NAME) | .image) = $IMAGE_URI | 
           del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' task-definition.json > register-task-definition.json
+      
+      - name: Verify updated task definition
+        run: |
+          echo "Updated task definition containers:"
+          cat register-task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
       
       - name: Register new task definition
         run: |
