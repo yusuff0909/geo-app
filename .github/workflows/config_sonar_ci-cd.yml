@@ -47,10 +47,10 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   ECR_REPO_NAME: geo-app
   IMAGE_TAG: ${{ github.run_number }}
-  TASK_DEFINITION: nginx-task
-  ECS_CLUSTER: nginx-cluster
-  ECS_SERVICE: nginx-service
-  CONTAINER_NAME: nginx
+  TASK_DEFINITION: geo-app-task  # Updated to match your geo-app
+  ECS_CLUSTER: geo-app-cluster   # Updated to match your geo-app  
+  ECS_SERVICE: geo-app-service   # Updated to match your geo-app
+  CONTAINER_NAME: geo-app        # Updated to match your geo-app
 
 jobs:
   build:
@@ -208,8 +208,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     #  needs: sonar  # ensures this runs after 'sonar'
-    outputs:
-      image-uri: ${{ steps.push-image.outputs.image-uri }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -286,10 +284,21 @@ jobs:
       - name: Push Docker image to ECR
         id: push-image
         run: |
-          IMAGE_URI="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ github.sha }}"
           docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ github.sha }}
           docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ steps.version.outputs.APP_VERSION }}
-          echo "image-uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+          
+          # Store image URI in environment for next job
+          echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ github.sha }}" >> $GITHUB_ENV
+          
+          # Also save to a file for artifact sharing
+          echo "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ github.sha }}" > image_uri.txt
+
+      # Upload image URI as artifact for deployment job
+      - name: Upload image URI
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-uri
+          path: image_uri.txt
 
       # Post Trivy results as a comment on PR
       - name: Post Fix Suggestions on PR
@@ -359,7 +368,7 @@ jobs:
   # Continuous deployment
   Deploy:
     runs-on: ubuntu-latest
-    needs: docker  # Depends on Build job
+    needs: docker  # Depends on docker job
     steps:
       - name: AWS Creds Config 
         uses: aws-actions/configure-aws-credentials@v4
@@ -367,27 +376,60 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
       
+      # Download the image URI artifact
+      - name: Download image URI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-uri
+          path: ./
+      
+      # Read image URI from file
+      - name: Read image URI
+        run: |
+          IMAGE_URI=$(cat image_uri.txt)
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "Using image: $IMAGE_URI"
+      
       - name: Download current task definition
         run: |
           aws ecs describe-task-definition --task-definition ${{ env.TASK_DEFINITION }} --query taskDefinition > task-definition.json
       
-      - name: Debug image URI and task definition
+      - name: Debug current task definition
         run: |
-          echo "Image URI: ${{ needs.docker.outputs.image-uri }}"
-          echo "Container Name: ${{ env.CONTAINER_NAME }}"
           echo "Current task definition containers:"
           cat task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
+          echo "Looking for container: ${{ env.CONTAINER_NAME }}"
       
       - name: Update task definition with new ECR image
         run: |
-          jq --arg IMAGE_URI "${{ needs.docker.outputs.image-uri }}" --arg CONTAINER_NAME "${{ env.CONTAINER_NAME }}" '
-          (.containerDefinitions[] | select(.name == $CONTAINER_NAME) | .image) = $IMAGE_URI | 
+          # First, let's see what containers exist
+          echo "Available containers in task definition:"
+          cat task-definition.json | jq -r '.containerDefinitions[].name'
+          
+          # Update the task definition - try to find geo-app container first, fallback to configured name
+          jq --arg IMAGE_URI "${{ env.IMAGE_URI }}" --arg CONTAINER_NAME "${{ env.CONTAINER_NAME }}" '
+          # Try to find a container with "geo-app" in the name first
+          if (.containerDefinitions | map(.name) | any(test("geo-app"; "i"))) then
+            (.containerDefinitions[] | select(.name | test("geo-app"; "i")) | .image) = $IMAGE_URI
+          else
+            (.containerDefinitions[] | select(.name == $CONTAINER_NAME) | .image) = $IMAGE_URI
+          end |
           del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' task-definition.json > register-task-definition.json
       
       - name: Verify updated task definition
         run: |
           echo "Updated task definition containers:"
           cat register-task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
+          
+          # Validate that at least one container has the new image
+          NEW_IMAGE_COUNT=$(cat register-task-definition.json | jq '[.containerDefinitions[] | select(.image == "'${{ env.IMAGE_URI }}'")]' | jq length)
+          if [ "$NEW_IMAGE_COUNT" -eq 0 ]; then
+            echo "ERROR: No container was updated with the new image!"
+            echo "Available containers:"
+            cat register-task-definition.json | jq -r '.containerDefinitions[].name'
+            exit 1
+          fi
+          echo "Successfully updated $NEW_IMAGE_COUNT container(s) with new image"
       
       - name: Register new task definition
         run: |
@@ -396,4 +438,8 @@ jobs:
       
       - name: Update ECS service
         run: |
+          echo "Updating ECS service with new task definition: ${{ env.NEW_TASK_DEFINITION }}"
           aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --task-definition ${{ env.NEW_TASK_DEFINITION }} --force-new-deployment
+          
+          echo "Deployment initiated successfully!"
+          echo "Monitor the deployment status in the AWS ECS console"
