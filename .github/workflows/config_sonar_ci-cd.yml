@@ -269,28 +269,13 @@ jobs:
 
        uses: aws-actions/amazon-ecr-login@v2
 
-# Generate incremental build number
-     - name: Generate build number
-
-       id: build-number
-
-       run: |
-
-        BUILD_NUMBER=${{ github.run_number }}
-
-        echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
-
-        echo "Build number: $BUILD_NUMBER"
-
 # Build Docker image 
 
      - name: Build Docker image
 
        run: |
 
-        BUILD_NUMBER=${{ steps.build-number.outputs.build_number }}
-
-        docker build -t geo-app:$BUILD_NUMBER -t geo-app:${{ github.sha }} .
+        docker build -t geo-app:${{ github.sha }} .
 
 # Trivy Scan for Vulnerabilities
 
@@ -300,7 +285,7 @@ jobs:
 
        with:
 
-         image-ref: geo-app:${{ steps.build-number.outputs.build_number }}
+         image-ref: geo-app:${{ github.sha }}
 
          format: table  # can also use 'json' or 'sarif'
 
@@ -316,7 +301,7 @@ jobs:
 
        with:
 
-         image-ref: geo-app:${{ steps.build-number.outputs.build_number }}
+         image-ref: geo-app:${{ github.sha }}
 
          format: json
 
@@ -349,19 +334,11 @@ jobs:
 
         APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
 
-        BUILD_NUMBER=${{ steps.build-number.outputs.build_number }}
-
         echo "App Version: $APP_VERSION"
 
-        echo "Build Number: $BUILD_NUMBER"
+        docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
 
-        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
-
-        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:$APP_VERSION
-
-        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:$BUILD_NUMBER
-
-        docker tag geo-app:$BUILD_NUMBER ${{ steps.login-ecr.outputs.registry }}/geo-app:latest
+        docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:$APP_VERSION
 
 # Push Docker image to ECR    
      - name: Push Docker image to ECR
@@ -370,19 +347,13 @@ jobs:
 
         APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
 
-        BUILD_NUMBER=${{ steps.build-number.outputs.build_number }}
-
         echo "App Version: $APP_VERSION"
-
-        echo "Build Number: $BUILD_NUMBER"
 
         docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
 
         docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:$APP_VERSION
 
-        docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:$BUILD_NUMBER
-
-        docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:latest
+# Post Trivy results as a comment on PR
 
      - name: Post Fix Suggestions on PR
 
