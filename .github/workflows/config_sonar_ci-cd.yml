@@ -25,480 +25,357 @@ name: Geolocation App CI/CD
 # The workflow is designed to run on an Ubuntu environment and uses the latest versions of the actions for checkout, Java setup, and caching.
 
 on:
-
- push:
-
-   branches:
-
-     - main
-
- pull_request:
-
-   branches:
-
-     - main
-
- 
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
-
- id-token: write
-
- contents: read
-
- pull-requests: write
-
- issues: write
-
- 
+  id-token: write
+  contents: read
+  pull-requests: write
+  issues: write
 
 # GLOBAL ENV: Only GitHub secrets or constants
-
 env:
-
- ARTIFACTORY_URL: ${{ secrets.ARTIFACT_URL }}
-
- SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
- SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
- ECR_ROLE: ${{ secrets.ECR_ACESS_ROLE }}
-
- AWS_REGION: ${{ secrets.AWS_REGION }}
-
- 
+  ARTIFACTORY_URL: ${{ secrets.ARTIFACT_URL }}
+  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  ECR_ROLE: ${{ secrets.ECR_ACESS_ROLE }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPO_NAME: dev1
+  IMAGE_TAG: ${{ github.run_number }}
+  TASK_DEFINITION: nginx-task
+  ECS_CLUSTER: nginx-cluster
+  ECS_SERVICE: nginx-service
+  CONTAINER_NAME: nginx
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
- build:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: 17
+          cache: 'maven'
 
-   runs-on: ubuntu-latest
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
 
-   steps:
+      # This step compiles the project and runs tests
+      - name: Build with Maven
+        run: mvn -B clean verify
 
-     - uses: actions/checkout@v4
+      - name: Package with Maven
+        run: mvn -B clean package
 
-       with:
+      # This step uploads the JAR file as an artifact for later use in the Docker build job
+      - name: Upload JAR file
+        uses: actions/upload-artifact@v4
+        with:
+          name: geo-app-jar
+          path: target/*.jar
 
-         fetch-depth: 0
-
- 
-
-     - name: Set up JDK 17
-
-       uses: actions/setup-java@v3
-
-       with:
-
-         distribution: 'temurin'
-
-         java-version: 17
-
-         cache: 'maven'
-
-
-     - name: Cache Maven packages
-
-       uses: actions/cache@v4
-
-       with:
-
-         path: ~/.m2
-
-         key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-
-         restore-keys: ${{ runner.os }}-m2
-
-# This step compiles the project and runs tests
-
-     - name: Build with Maven
-
-       run: mvn -B clean verify
-
-
-     - name: Package with Maven
-
-       run: mvn -B clean package
-
-# This step uploads the JAR file as an artifact for later use in the Docker build job
-
-     - name: Upload JAR file
-
-       uses: actions/upload-artifact@v4
-
-       with:
-
-         name: geo-app-jar
-
-         path: target/*.jar
-
- deploy:
-   name: Deploy to JFrog
-   runs-on: ubuntu-latest
-   needs: sonar
+#  deploy:
+#    name: Deploy to JFrog
+#    runs-on: ubuntu-latest
+#    needs: sonar
   
-   steps:
-   - name: Checkout Code
-     uses: actions/checkout@v4
-     with:
-       fetch-depth: 0
+#    steps:
+#    - name: Checkout Code
+#      uses: actions/checkout@v4
+#      with:
+#        fetch-depth: 0
   
-   - name: Download JAR file artifact
-     uses: actions/download-artifact@v4
-     with:
-       name: geo-app-jar
-       path: target/
+#    - name: Download JAR file artifact
+#      uses: actions/download-artifact@v4
+#      with:
+#        name: geo-app-jar
+#        path: target/
  
-   - name: Deploy to GitHub Packages
-     run: |
-         echo $GIT_HUB_TOKEN
-         echo $GITHUB_USERNAME
-         pwd
-         ls
-         APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
-         echo $APP_VERSION
+#    - name: Deploy to GitHub Packages
+#      run: |
+#          echo $GIT_HUB_TOKEN
+#          echo $GITHUB_USERNAME
+#          pwd
+#          ls
+#          APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
+#          echo $APP_VERSION
  
-         APP_NAME=`grep -m2 '<artifactId>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
-         echo $APP_NAME
+#          APP_NAME=`grep -m2 '<artifactId>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
+#          echo $APP_NAME
  
-         APP_LONG_NAME=$APP_NAME-$APP_VERSION.jar
-         echo $APP_LONG_NAME
-         echo $MAVEN_USERNAME
-         ls target
+#          APP_LONG_NAME=$APP_NAME-$APP_VERSION.jar
+#          echo $APP_LONG_NAME
+#          echo $MAVEN_USERNAME
+#          ls target
         
-         echo curl -v --user $MAVEN_USERNAME:$MAVEN_PASSWORD -T target/$APP_LONG_NAME -X PUT "$ARTIFACTORY_URL/artifactory/GEOLOCATION-GITHUB_ACTION/$APP_LONG_NAME"
-         curl -v --user $MAVEN_USERNAME:$MAVEN_PASSWORD -T target/$APP_LONG_NAME -X PUT "$ARTIFACTORY_URL/artifactory/GEOLOCATION-GITHUB_ACTION/$APP_LONG_NAME"
-     env:
-       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-       GITHUB_USERNAME: ${{ github.actor }}
-       MAVEN_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
-       MAVEN_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
-       ARTIFACTORY_URL: ${{ secrets.ARTIFACT_URL }}
+#          echo curl -v --user $MAVEN_USERNAME:$MAVEN_PASSWORD -T target/$APP_LONG_NAME -X PUT "$ARTIFACTORY_URL/artifactory/GEOLOCATION-GITHUB_ACTION/$APP_LONG_NAME"
+#          curl -v --user $MAVEN_USERNAME:$MAVEN_PASSWORD -T target/$APP_LONG_NAME -X PUT "$ARTIFACTORY_URL/artifactory/GEOLOCATION-GITHUB_ACTION/$APP_LONG_NAME"
+#      env:
+#        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        GITHUB_USERNAME: ${{ github.actor }}
+#        MAVEN_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+#        MAVEN_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+#        ARTIFACTORY_URL: ${{ secrets.ARTIFACT_URL }}
 
- sonar:
+#  sonar:
 
-   runs-on: ubuntu-latest
+#    runs-on: ubuntu-latest
 
-   needs: build
+#    needs: build
 
-   steps:
+#    steps:
 
-     - uses: actions/checkout@v4
+#      - uses: actions/checkout@v4
 
-       with:
+#        with:
 
-         fetch-depth: 0
+#          fetch-depth: 0
 
-# Set up JDK 17 for SonarQube analysis
+# # Set up JDK 17 for SonarQube analysis
 
-     - name: Set up JDK 17
+#      - name: Set up JDK 17
 
-       uses: actions/setup-java@v3
+#        uses: actions/setup-java@v3
 
-       with:
+#        with:
 
-         distribution: 'temurin'
+#          distribution: 'temurin'
 
-         java-version: 17
+#          java-version: 17
 
-         cache: 'maven'
+#          cache: 'maven'
 
-# Cache SonarQube packages to speed up the analysis process
+# # Cache SonarQube packages to speed up the analysis process
 
-     - name: Cache SonarQube packages
+#      - name: Cache SonarQube packages
 
-       uses: actions/cache@v4
+#        uses: actions/cache@v4
 
-       with:
+#        with:
 
-         path: ~/.sonar/cache
+#          path: ~/.sonar/cache
 
-         key: ${{ runner.os }}-sonar
+#          key: ${{ runner.os }}-sonar
 
-         restore-keys: ${{ runner.os }}-sonar
+#          restore-keys: ${{ runner.os }}-sonar
 
-# SonarQube Analysis
+# # SonarQube Analysis
 
-     - name: SonarQube Scan
+#      - name: SonarQube Scan
 
-       env:
+#        env:
 
-         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-         SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+#          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
 
-         SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+#          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
 
-       run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=geo-app -Dsonar.qualitygate.wait=true # Replace 'geo-app' with your actual project key
+#        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=geo-app -Dsonar.qualitygate.wait=true # Replace 'geo-app' with your actual project key
 
     
 
-     - name: Verify Quality Gate Status
-
-       uses: sonarsource/sonarqube-quality-gate-action@master
-
-       with:
-
-           scanMetadataReportFile: target/sonar/report-task.txt
-
-           pollingTimeoutSec: 300
-
-       env:
-
-         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
- docker:
-
-   name: Docker Build & Push to ECR
-
-   runs-on: ubuntu-latest
-
-   needs: sonar  # ensures this runs after 'sonar'
-
-   steps:
-
-     - name: Checkout Code
-
-       uses: actions/checkout@v4
-
-       with:
-
-         fetch-depth: 0
-
-     # Use OIDC Role for this repo
-
-     - name: Configure AWS Credentials
-
-       uses: aws-actions/configure-aws-credentials@v4
-
-       with:
-
-         role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-
-         aws-region: ${{ secrets.AWS_REGION }}
-
-     # Download the JAR file artifact from the build job
-
-     - name: Download JAR file artifact
-
-       uses: actions/download-artifact@v4
-
-       with:
-
-         name: geo-app-jar
-
-         path: target/
-
-# Login to Amazon ECR
-
-     - name: Login to Amazon ECR
-
-       id: login-ecr
-
-       uses: aws-actions/amazon-ecr-login@v2
-
-# Build Docker image 
-
-     - name: Build Docker image
-
-       run: |
-
-        docker build -t geo-app:${{ github.sha }} .
-
-# Trivy Scan for Vulnerabilities
-
-     - name: Scan Docker image with Trivy
-
-       uses: aquasecurity/trivy-action@master
-
-       with:
-
-         image-ref: geo-app:${{ github.sha }}
-
-         format: table  # can also use 'json' or 'sarif'
-
-         #exit-code: 1   # fail job if vulnerabilities are found
-
-         severity: CRITICAL,HIGH  # only report high/critical issues
-
-# Trivy Scan for Docker Image - JSON output for PR comments
-
-     - name: Scan Docker image with Trivy (JSON output)
-
-       uses: aquasecurity/trivy-action@master
-
-       with:
-
-         image-ref: geo-app:${{ github.sha }}
-
-         format: json
-
-         output: trivy-image-results.json
-
-         severity: CRITICAL,HIGH
-
-# Trivy Scan for Filesystem - JSON output for PR comments
-
-     - name: Scan filesystem with Trivy (JSON output)
-
-       uses: aquasecurity/trivy-action@master
-
-       with:
-
-         scan-type: fs
-
-         scan-ref: .
-
-         format: json
-
-         output: trivy-fs-results.json
-
-         severity: CRITICAL,HIGH
-
-# Extract version once for reuse
-     - name: Extract App Version
-       id: version
-       run: |
-        APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
-        echo "APP_VERSION=$APP_VERSION" >> $GITHUB_OUTPUT
-        echo "App Version: $APP_VERSION"
-
-# Tag image for ECR
-     - name: Tag image for ECR
-       run: |
-        docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
-        docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ steps.version.outputs.APP_VERSION }}
-
-# Push Docker image to ECR    
-     - name: Push Docker image to ECR
-       run: |
-        docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
-        docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ steps.version.outputs.APP_VERSION }}
-
-# Post Trivy results as a comment on PR
-
-     - name: Post Fix Suggestions on PR
-
-       if: github.event_name == 'pull_request'
-
-       uses: actions/github-script@v6
-
-       with:
-
-         github-token: ${{ secrets.GITHUB_TOKEN }}
-
-         script: |
-
-           // Use require() to import Node.js modules
-
-           const fs = require('fs');
-
-           
-
-           try {
-
-             let fsReport = { Results: [] };
-
-             let imageReport = { Results: [] };
-
-             
-
-             // Try to read filesystem report
-
-             try {
-
-               if (fs.existsSync('trivy-fs-results.json')) {
-
-                 fsReport = JSON.parse(fs.readFileSync('trivy-fs-results.json', 'utf8'));
-
-               } else {
-
-                 console.log('trivy-fs-results.json not found');
-
-               }
-
-             } catch (fsError) {
-
-               console.log('Error reading filesystem report:', fsError.message);
-
-             }
-
-             
-
-             // Try to read image report
-
-             try {
-
-               if (fs.existsSync('trivy-image-results.json')) {
-
-                 imageReport = JSON.parse(fs.readFileSync('trivy-image-results.json', 'utf8'));
-
-               } else {
-
-                 console.log('trivy-image-results.json not found');
-
-               }
-
-             } catch (imageError) {
-
-               console.log('Error reading image report:', imageError.message);
-
-             }
-
-             
-
-             const formatVulns = (vulns) => vulns.map(v => `
-
-               **Package:** ${v.PkgName} (${v.InstalledVersion})  
-
-               **CVE:** ${v.VulnerabilityID} (${v.Severity})  
-
-               **Fix Version:** ${v.FixedVersion || 'None'}  
-
-               **Advisory:** ${v.PrimaryURL || 'N/A'}
-
-             `).join('\n');
-
-             
-
-             const fsVulns = fsReport.Results?.flatMap(r => r.Vulnerabilities || []) || [];
-
-             const imageVulns = imageReport.Results?.flatMap(r => r.Vulnerabilities || []) || [];
-
-             
-
-             let comment = '## 🔍 Trivy Security Report\n';
-
-             if (fsVulns.length > 0) comment += `### 📂 Filesystem Vulnerabilities\n${formatVulns(fsVulns)}\n`;
-
-             if (imageVulns.length > 0) comment += `### 🐳 Docker Image Vulnerabilities\n${formatVulns(imageVulns)}\n`;
-
-             if (fsVulns.length + imageVulns.length === 0) comment += '✅ No critical/high vulnerabilities found.';
-
-             
-
-             await github.rest.issues.createComment({
-
-               issue_number: context.issue.number,
-
-               owner: context.repo.owner,
-
-               repo: context.repo.repo,
-
-               body: comment
-
-             });
-
-             
-
-             console.log('Successfully posted security report comment');
-
-             
-
-           } catch (error) {
-
-             console.error('Failed to process Trivy results:', error.message);
-
-             core.setFailed('Failed to process Trivy results: ' + error.message);
-
-           }
+#      - name: Verify Quality Gate Status
+
+#        uses: sonarsource/sonarqube-quality-gate-action@master
+
+#        with:
+
+#            scanMetadataReportFile: target/sonar/report-task.txt
+
+#            pollingTimeoutSec: 300
+
+#        env:
+
+#          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  docker:
+    name: Docker Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: build
+    #  needs: sonar  # ensures this runs after 'sonar'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Use OIDC Role for this repo
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # Download the JAR file artifact from the build job
+      - name: Download JAR file artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geo-app-jar
+          path: target/
+
+      # Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Build Docker image 
+      - name: Build Docker image
+        run: |
+          docker build -t geo-app:${{ github.sha }} .
+
+      # Trivy Scan for Vulnerabilities
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: geo-app:${{ github.sha }}
+          format: table  # can also use 'json' or 'sarif'
+          #exit-code: 1   # fail job if vulnerabilities are found
+          severity: CRITICAL,HIGH  # only report high/critical issues
+
+      # Trivy Scan for Docker Image - JSON output for PR comments
+      - name: Scan Docker image with Trivy (JSON output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: geo-app:${{ github.sha }}
+          format: json
+          output: trivy-image-results.json
+          severity: CRITICAL,HIGH
+
+      # Trivy Scan for Filesystem - JSON output for PR comments
+      - name: Scan filesystem with Trivy (JSON output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: trivy-fs-results.json
+          severity: CRITICAL,HIGH
+
+      # Extract version once for reuse
+      - name: Extract App Version
+        id: version
+        run: |
+          APP_VERSION=`grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)'`
+          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_OUTPUT
+          echo "App Version: $APP_VERSION"
+
+      # Tag image for ECR
+      - name: Tag image for ECR
+        run: |
+          docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
+          docker tag geo-app:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ steps.version.outputs.APP_VERSION }}
+
+      # Push Docker image to ECR    
+      - name: Push Docker image to ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ github.sha }}
+          docker push ${{ steps.login-ecr.outputs.registry }}/geo-app:${{ steps.version.outputs.APP_VERSION }}
+
+      # Post Trivy results as a comment on PR
+      - name: Post Fix Suggestions on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Use require() to import Node.js modules
+            const fs = require('fs');
+            
+            try {
+              let fsReport = { Results: [] };
+              let imageReport = { Results: [] };
+              
+              // Try to read filesystem report
+              try {
+                if (fs.existsSync('trivy-fs-results.json')) {
+                  fsReport = JSON.parse(fs.readFileSync('trivy-fs-results.json', 'utf8'));
+                } else {
+                  console.log('trivy-fs-results.json not found');
+                }
+              } catch (fsError) {
+                console.log('Error reading filesystem report:', fsError.message);
+              }
+              
+              // Try to read image report
+              try {
+                if (fs.existsSync('trivy-image-results.json')) {
+                  imageReport = JSON.parse(fs.readFileSync('trivy-image-results.json', 'utf8'));
+                } else {
+                  console.log('trivy-image-results.json not found');
+                }
+              } catch (imageError) {
+                console.log('Error reading image report:', imageError.message);
+              }
+              
+              const formatVulns = (vulns) => vulns.map(v => `
+                **Package:** ${v.PkgName} (${v.InstalledVersion})  
+                **CVE:** ${v.VulnerabilityID} (${v.Severity})  
+                **Fix Version:** ${v.FixedVersion || 'None'}  
+                **Advisory:** ${v.PrimaryURL || 'N/A'}
+              `).join('\n');
+              
+              const fsVulns = fsReport.Results?.flatMap(r => r.Vulnerabilities || []) || [];
+              const imageVulns = imageReport.Results?.flatMap(r => r.Vulnerabilities || []) || [];
+              
+              let comment = '## 🔍 Trivy Security Report\n';
+              if (fsVulns.length > 0) comment += `### 📂 Filesystem Vulnerabilities\n${formatVulns(fsVulns)}\n`;
+              if (imageVulns.length > 0) comment += `### 🐳 Docker Image Vulnerabilities\n${formatVulns(imageVulns)}\n`;
+              if (fsVulns.length + imageVulns.length === 0) comment += '✅ No critical/high vulnerabilities found.';
+              
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+              
+              console.log('Successfully posted security report comment');
+              
+            } catch (error) {
+              console.error('Failed to process Trivy results:', error.message);
+              core.setFailed('Failed to process Trivy results: ' + error.message);
+            }
+
+  # Continuous deployment
+  Deploy:
+    runs-on: ubuntu-latest
+    needs: Build  # Depends on Build job
+    steps:
+      - name: AWS Creds Config 
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{ env.TASK_DEFINITION }} --query taskDefinition > task-definition.json
+      
+      - name: Update task definition with new ECR image
+        run: |
+          jq --arg IMAGE_URI "${{ needs.Build.outputs.image-uri }}" '.containerDefinitions[0].image = $IMAGE_URI | 
+          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' task-definition.json > register-task-definition.json
+      
+      - name: Register new task definition
+        run: |
+          aws ecs register-task-definition --cli-input-json file://register-task-definition.json
+          echo "NEW_TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition ${{ env.TASK_DEFINITION }} --query 'taskDefinition.taskDefinitionArn' --output text)" >> $GITHUB_ENV
+      
+      - name: Update ECS service
+        run: |
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --task-definition ${{ env.NEW_TASK_DEFINITION }} --force-new-deployment
