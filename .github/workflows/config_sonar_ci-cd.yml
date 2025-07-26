@@ -45,7 +45,7 @@ env:
   SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
   ECR_ROLE: ${{ secrets.ECR_ACESS_ROLE }}
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPO_NAME: dev1
+  ECR_REPO_NAME: geo-app
   IMAGE_TAG: ${{ github.run_number }}
   TASK_DEFINITION: nginx-task
   ECS_CLUSTER: nginx-cluster
