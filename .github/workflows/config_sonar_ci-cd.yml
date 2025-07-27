@@ -11,6 +11,7 @@ permissions:
   id-token: write
   contents: read
 
+# Repository key for jfrog: GEOLOCATION-GITHUB_ACTION
 # GLOBAL ENV: Only GitHub secrets or constants
 env:
   ARTIFACTORY_URL: ${{ secrets.ARTIFACT_URL }}
