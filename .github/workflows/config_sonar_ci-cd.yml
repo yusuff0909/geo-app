@@ -228,29 +228,59 @@ jobs:
             --query 'taskDefinition' \
             --output json > task-definition.json
           
+          echo "Original task definition structure:"
+          cat task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
+          
           # Remove fields that shouldn't be in the new task definition registration
           cat task-definition.json | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' > clean-task-definition.json
           
           echo "Task definition downloaded and cleaned"
-          cat clean-task-definition.json
+          echo "Container definitions in cleaned task definition:"
+          cat clean-task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
 
       - name: Update task definition with new image
         id: update-task-def
         run: |
           IMAGE_URI="${{ needs.docker.outputs.image-uri }}"
+          CONTAINER_NAME="${{ env.CONTAINER_NAME }}"
           echo "Updating task definition with new image: $IMAGE_URI"
+          echo "Container name: $CONTAINER_NAME"
+          
+          # Debug: Show current container definitions
+          echo "Current container definitions:"
+          cat clean-task-definition.json | jq '.containerDefinitions'
           
           # Update the image URI in the container definition
-          cat clean-task-definition.json | jq --arg IMAGE_URI "$IMAGE_URI" \
-            '(.containerDefinitions[] | select(.name == "${{ env.CONTAINER_NAME }}") | .image) = $IMAGE_URI' \
+          cat clean-task-definition.json | jq --arg IMAGE_URI "$IMAGE_URI" --arg CONTAINER_NAME "$CONTAINER_NAME" \
+            '(.containerDefinitions[] | select(.name == $CONTAINER_NAME) | .image) = $IMAGE_URI' \
             > updated-task-definition.json
           
           echo "Updated task definition:"
           cat updated-task-definition.json
+          
+          # Verify the image was updated
+          echo "Verifying image update:"
+          cat updated-task-definition.json | jq --arg CONTAINER_NAME "$CONTAINER_NAME" \
+            '.containerDefinitions[] | select(.name == $CONTAINER_NAME) | .image'
 
       - name: Register new task definition
         id: register-task-def
         run: |
+          # Validate that all containers have images set
+          echo "Validating task definition before registration..."
+          EMPTY_IMAGES=$(cat updated-task-definition.json | jq '.containerDefinitions[] | select(.image == null or .image == "") | .name' -r)
+          
+          if [ ! -z "$EMPTY_IMAGES" ]; then
+            echo "Error: The following containers have empty or null images:"
+            echo "$EMPTY_IMAGES"
+            echo "Task definition validation failed!"
+            exit 1
+          fi
+          
+          echo "All containers have valid images. Proceeding with registration..."
+          echo "Final task definition to register:"
+          cat updated-task-definition.json | jq '.containerDefinitions[] | {name: .name, image: .image}'
+          
           echo "Registering new task definition..."
           NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
             --cli-input-json file://updated-task-definition.json \
