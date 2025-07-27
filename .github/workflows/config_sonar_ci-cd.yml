@@ -19,7 +19,7 @@ env:
   ECS_SERVICE: nginx-service
   CONTAINER_NAME: nginx
   ECR_REPO_NAME: geo-app
-  IMAGE_TAG: ${{ github.sha }}  # Using git SHA for better traceability
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   build:
@@ -55,9 +55,53 @@ jobs:
           name: geo-app-jar
           path: target/*.jar
 
-  docker:
+  sonar:
     runs-on: ubuntu-latest
     needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: 17
+          cache: 'maven'
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: SonarQube Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=geo_app -Dsonar.qualitygate.wait=true
+
+      - name: Verify Quality Gate Status
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        with:
+          scanMetadataReportFile: .scannerwork/report-task.txt
+          sonarToken: ${{ secrets.SONAR_TOKEN }}
+          timeoutMinutes: 5
+          sleepTime: 10
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: sonar
     outputs:
       image-uri: ${{ steps.set-image.outputs.image-uri }}
     steps:
@@ -104,9 +148,66 @@ jobs:
         run: |
           echo "image-uri=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPO_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
 
+  deploy-frog:
+    runs-on: ubuntu-latest
+    needs: sonar
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download JAR file artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geo-app-jar
+          path: target/
+
+      - name: Read secrets from Vault
+        uses: hashicorp/vault-action@v2
+        with:
+          url: http://52.32.151.162:8200
+          method: token
+          token: ${{ secrets.VAULT_TOKEN }}
+          exportEnv: true
+          secrets: |
+            secrets/creds/jfrog username | MAVEN_USERNAME_A ;
+            secrets/creds/jfrog password | MAVEN_PASSWORD_A
+
+      - name: Deploy to JFrog
+        env:
+          MAVEN_USERNAME_A: ${{ env.MAVEN_USERNAME_A }}
+          MAVEN_PASSWORD_A: ${{ env.MAVEN_PASSWORD_A }}
+          ARTIFACTORY_URL: ${{ env.ARTIFACTORY_URL }}
+        run: |
+          APP_VERSION=$(grep -m2 '<version>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)')
+          APP_NAME=$(grep -m2 '<artifactId>' pom.xml | tail -1 | grep -oP '(?<=>).*(?=<)')
+          APP_LONG_NAME=$APP_NAME-$APP_VERSION.jar
+
+          echo "Deploying $APP_LONG_NAME to Artifactory..."
+          echo "Artifactory URL: $ARTIFACTORY_URL"
+
+          # Verify JAR file exists
+          if [ ! -f "target/$APP_LONG_NAME" ]; then
+            echo "Error: JAR file not found at target/$APP_LONG_NAME"
+            ls -la target/
+            exit 1
+          fi
+
+          curl -v --user $MAVEN_USERNAME_A:$MAVEN_PASSWORD_A \
+            -T target/$APP_LONG_NAME \
+            -X PUT "$ARTIFACTORY_URL/artifactory/GEOLOCATION-GITHUB_ACTION/$APP_LONG_NAME"
+
+          # Verify upload was successful
+          if [ $? -ne 0 ]; then
+            echo "Error: Failed to upload artifact to JFrog"
+            exit 1
+          fi
+          echo "Artifact successfully deployed to JFrog"
+
   deploy:
     runs-on: ubuntu-latest
-    needs: docker
+    needs: [docker, deploy-frog]  # Now depends on both docker and JFrog deployment
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -127,23 +228,40 @@ jobs:
             --query 'taskDefinition' \
             --output json > task-definition.json
           
-          # Clean up task definition
+          if ! jq -e '.containerDefinitions' task-definition.json > /dev/null; then
+            echo "Error: No containerDefinitions found in task definition"
+            exit 1
+          fi
+          
           jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' task-definition.json > clean-task-definition.json
 
       - name: Update task definition with new image
         id: update-task-def
         run: |
+          if ! jq --arg CONTAINER_NAME "${{ env.CONTAINER_NAME }}" '.containerDefinitions[] | select(.name == $CONTAINER_NAME)' clean-task-definition.json > /dev/null; then
+            echo "Error: Container '${{ env.CONTAINER_NAME }}' not found in task definition"
+            echo "Available containers:"
+            jq '.containerDefinitions[].name' clean-task-definition.json
+            exit 1
+          fi
+          
           jq --arg IMAGE_URI "${{ needs.docker.outputs.image-uri }}" \
              --arg CONTAINER_NAME "${{ env.CONTAINER_NAME }}" \
              '(.containerDefinitions[] | select(.name == $CONTAINER_NAME) | .image) = $IMAGE_URI' \
              clean-task-definition.json > updated-task-definition.json
+          
+          if ! jq -e '.containerDefinitions[] | select(.name == "'${{ env.CONTAINER_NAME }}'") | .image' updated-task-definition.json > /dev/null; then
+            echo "Error: Failed to update image for container '${{ env.CONTAINER_NAME }}'"
+            exit 1
+          fi
 
       - name: Register new task definition
         id: register-task-def
         run: |
-          # Validate images
-          if jq -e '.containerDefinitions[] | select(.image == null or .image == "")' updated-task-definition.json; then
-            echo "Error: Some containers have empty images"
+          EMPTY_IMAGES=$(jq -r '.containerDefinitions[] | select(.image == null or .image == "") | .name' updated-task-definition.json)
+          if [ -n "$EMPTY_IMAGES" ]; then
+            echo "Error: The following containers have empty images:"
+            echo "$EMPTY_IMAGES"
             exit 1
           fi
           
