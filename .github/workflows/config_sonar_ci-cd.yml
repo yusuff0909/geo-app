@@ -95,14 +95,14 @@ jobs:
             -Dsonar.qualitygate.wait=true \
             -Dsonar.login=$SONAR_TOKEN
 
-      - name: Verify Quality Gate Status
-        uses: sonarsource/sonarqube-quality-gate-action@master
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          scanMetadataReportFile: .scannerwork/report-task.txt
-          timeoutMinutes: 5
-          sleepTime: 10
+      # - name: Verify Quality Gate Status
+      #   uses: sonarsource/sonarqube-quality-gate-action@master
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #   with:
+      #     scanMetadataReportFile: .scannerwork/report-task.txt
+      #     timeoutMinutes: 5
+      #     sleepTime: 10
 
   docker:
     runs-on: ubuntu-latest
